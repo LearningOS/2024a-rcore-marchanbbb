@@ -57,15 +57,58 @@ pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
 }
 
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    let start_va = VirtAddr::from(start);
+    let end_va = VirtAddr::from(start + len);
+    if start_va.page_offset() != 0 || port & !0x7 != 0 || port & 0x7 == 0 {
+        return -1;
+    }
+    let mut start_vpn = start_va.floor();
+    let pt = PageTable::from_token(current_user_token());
+    for _ in 0..((len + PAGE_SIZE - 1) / PAGE_SIZE) {
+        match pt.translate(start_vpn) {
+            Some(pte) => {
+                if pte.is_valid() {
+                    return -1;
+                }
+            }
+            None => {}
+        }
+        start_vpn.step();
+    }
+    let mut permissions = MapPermission::empty();
+    permissions.set(MapPermission::R, port & 0x1 != 0);
+    permissions.set(MapPermission::W, port & 0x2 != 0);
+    permissions.set(MapPermission::X, port & 0x4 != 0);
+    permissions.set(MapPermission::U, true);
+    insert_framed_area(start_va, end_va, permissions);
+    0
 }
 
 // YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+    trace!("kernel: sys_munmap");
+    let start_va = VirtAddr::from(start);
+    if start_va.page_offset() != 0 {
+        return -1;
+    }
+    let mut start_vpn = start_va.floor();
+    let end_va = VirtAddr::from(start + len);
+    let pt = PageTable::from_token(current_user_token());
+    for _ in 0..((len + PAGE_SIZE - 1) / PAGE_SIZE) {
+        match pt.translate(start_vpn) {
+            Some(pte) => {
+                if !pte.is_valid() {
+                    return -1;
+                }
+            }
+            None => return -1,
+        }
+        start_vpn.step();
+    }
+    drop_frame_area(start_va, end_va);
+    0
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {
